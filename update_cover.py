@@ -30,15 +30,15 @@ def crop_border(image):
     cv2.line(gray, (w//4, 0), ((w//2)+(w//4), 0), (255, 255, 255), 1)
     cv2.line(gray, (w//4, h-1), ((w//2)+(w//4), h-1), (255, 255, 255), 1)
 
-    gray = cv2.Canny(gray, 20, 55)
+    gray = cv2.Canny(gray, 40, 80)
     # Canny edge detection results in very thin lines. Particularly, 
 	# distinct lines aren't detected by findContours() so we dialate the lines 
     kernel = np.ones((2, 2),np.uint8)
     gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel, iterations = 2)
 
-    #cv2.imshow("Test", gray)
-    #cv2.waitKey(0)
-    #cv2.destroyAllWindows()
+    cv2.imshow("Test", gray)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
     # thresholding is unnecessary after edge detection 
     #_, binary_mask = cv2.threshold(gray, avg/2, 255, cv2.THRESH_BINARY)
@@ -53,14 +53,15 @@ def crop_border(image):
         print("BOX TOO SMALL RETURNING ORIGINAL IMAGE")
         return image 
 
-    # send the cropped image in for a second pass
+    # send the cropped image in for a second pass (any more passes are generally redundant)
     cropped_gray = image[y:y+h, x:x+w]
+    cropped_image = image[y:y+h, x:x+w]
     cropped_gray = cv2.cvtColor(cropped_gray, cv2.COLOR_BGR2GRAY)
     cropped_gray = cv2.equalizeHist(cropped_gray)
     cropped_gray = cv2.Canny(cropped_gray, 50, 100)
     cropped_gray = cv2.morphologyEx(cropped_gray, cv2.MORPH_CLOSE, kernel, iterations = 1)
 
-    contours, _ = cv2.findContours(gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(cropped_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     max_contour = max(contours, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(max_contour)
 
@@ -69,7 +70,7 @@ def crop_border(image):
         return image 
 
     # 9 pixel border to compensate the dilation
-    cropped_image = image[y:y+h, x+9:x+w-9]
+    cropped_image = cropped_image[y:y+h, x+9:x+w-9]
 
     return cropped_image
 
