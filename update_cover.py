@@ -6,7 +6,7 @@ from PIL import Image
 import argparse
 import eyed3
 import subprocess
-
+import matplotlib.pyplot as plt
 
 def extract_cover(mp3_path, out):
     audiofile = eyed3.load(mp3_path)
@@ -30,15 +30,18 @@ def crop_border(image):
     #_, gray = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY)
     #gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
-    height, width, _ = image.shape
-    cv2.line(gray, (width//6, 4), (width-(width//6), 4), (255, 255, 255), 3)
-    cv2.line(gray, (width//6, height-4), (width-(width//6), height-4), (255, 255, 255), 3)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0.5)
+    gray = cv2.Canny(gray, 20, 50, apertureSize=3, L2gradient=True)
 
-    gray = cv2.Canny(gray, 40, 100, apertureSize=7, L2gradient=True)
+    height, width, _ = image.shape
+    # forms a closed shape with vertical lines, to create a contour, 
+    # length doesn't matter because we will square the image at the end 
+    cv2.line(gray, (width//6, 4), (width-(width//6), 4), (255, 255, 255), 1)
+    cv2.line(gray, (width//6, height-4), (width-(width//6), height-4), (255, 255, 255), 1)
 
     # Canny edge detection results in very thin lines. Particularly, 
 	# distinct lines aren't detected by findContours() so we dialate the lines 
-    kernel = np.ones((2, 2),np.uint8)
+    kernel = np.ones((5, 5),np.uint8)
     gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel, iterations = 2)
 
     # Find largest contour in the bitmap
@@ -46,51 +49,98 @@ def crop_border(image):
     max_contour = max(contours, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(max_contour)
 
-    #draw_bounds(gray, x, y, w, h)
+    draw_bounds(gray, x, y, w, h)
 
-    # ignore crop if it's too small 
-    if float(w) < float(width)/2.2 or float(h) < float(height)/2.2:
+    # ignore crop if it's too small (usually the result of small foreground)
+    if float(w) < float(width)/2.5 or float(h) < float(height)/2.5:
         print("BOX TOO SMALL. RETURNING ORIGINAL IMAGE")
         draw_bounds(gray, x, y, w, h)
-        if height * width < 679600:
+        if height * width < 510000 and not args.noupscale:
             return upscale(image)
         return image 
-
-    # unnecessary since we can just square images that are already square-like 
-    cropped_gray = image[y:y+h, x:x+w]
-    cropped_image = image[y:y+h, x:x+w]
-    #_, cropped_gray = cv2.threshold(cropped_gray, 5, 255, cv2.THRESH_BINARY)
-    cropped_gray = cv2.cvtColor(cropped_gray, cv2.COLOR_BGR2GRAY)
-    #cropped_gray = cv2.equalizeHist(cropped_gray)
-    cropped_gray = cv2.Canny(cropped_gray, 100, 40, apertureSize=3)
-    kernel = np.ones((2, 2),np.uint8)
-    cropped_gray = cv2.morphologyEx(cropped_gray, cv2.MORPH_CLOSE, kernel, iterations = 2)
-
-    contours, _ = cv2.findContours(cropped_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    max_contour = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(max_contour)
-
-    #draw_bounds(cropped_gray, x, y, w, h)
-
-    if float(w) < float(width)/2.2 or float(h) < float(height)/2.2:
-        print("BOX TOO SMALL. RETURNING ORIGINAL IMAGE (SECOND PASS).\n\
-              FALLING BACK TO FIRST PASS IMAGE")
-        #draw_bounds(cropped_gray, x, y, w, h)
-    else:
-        cropped_image = cropped_image[y:y+h, x:x+w]
 
     # dilation was used so findContours can detect edges correctly,
     # so, the boundedRect will be offsetted proportional to the dilation, 
     # the solution is to square an image if it is already square-like
+    cropped_image = image[y:y+h, x:x+w]
     height, width, _ = cropped_image.shape
-    # this is always true lol
-    if float(width)/height < 1.15 or float(width)/height > 0.85:
+    if float(width)/height < 1.35 and float(width)/height > 0.65:
         print("SQUARING")
         cropped_image = crop_to_square(cropped_image)
+    else:
+        # find "best" square
+        cropped_gray = image[y:y+h, x:x+w]
+        cropped_gray = cv2.cvtColor(cropped_gray, cv2.COLOR_BGR2GRAY)
+        # the subject usually has more details(edges) than the background,
+        # so for the second pass, use a high threshold so the view centers around the subject 
+        cropped_gray = cv2.GaussianBlur(cropped_image, (7, 7), 0)
+        cropped_gray = cv2.Canny(cropped_gray, 135, 135, apertureSize=3, L2gradient=False)
+        kernel1 = np.ones((2, 2),np.uint8)
+        cropped_gray = cv2.morphologyEx(cropped_gray, cv2.MORPH_CLOSE, kernel1, iterations = 1)
+        _, bitmask = cv2.threshold(cropped_gray, 10, 255, cv2.THRESH_BINARY)
+
+        # iterate through candidates
+        min_t = 99999999
+        max_t = 0
+
+        min_dim = min(width, height)
+        max_x = width - min_dim
+        max_y = height - min_dim
+        center = (max_x//2, max_y//2)
+        best = 0
+        best_coord = (0, 0)
+
+        pos_data, pixel_data, perim_data = [], [] , []
+        for j in range(0, max_y+1):
+            # modify jumps to speed up algorithm
+            for i in range(0, max_x+1, 1):
+                candidate = bitmask[j:j+min_dim, i:i+min_dim]
+                dist = np.sqrt((center[0]-i)**2 + (center[1]-j)**2)
+                square_sum = np.sum(candidate) 
+
+                sq_contours, _ = cv2.findContours(candidate, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                perim_sum = np.sum([cv2.arcLength(cnt, False) for cnt in sq_contours])*255
+
+                pos_data.append(i)
+                pixel_data.append(square_sum)
+                perim_data.append(perim_sum)
+
+                # dist*2440 penalizes the frame for moving away from the center with minimal gain
+                square_sum -= 2440*dist
+
+                if square_sum > best:
+                    best = square_sum
+                    best_coord = (i, j)
+                if square_sum < min_t:
+                    min_t = square_sum
+                if square_sum > max_t:
+                    max_t = square_sum
+
+        # length perimeter is pretty much the same as just adding the pixel values
+        plt.plot(pos_data, perim_data, color='blue', linewidth=3)
+        plt.plot(pos_data, pixel_data, color='red', linewidth=3)
+        plt.xlabel('x offset')
+        plt.ylabel('perimeter value')
+        plt.show()
+
+        dist = np.sqrt((center[0]-best_coord[0])**2 + (center[1]-best_coord[1])**2) / (width*height*0.00005)
+        print(f"distance: {dist}")
+        print(f"range: {max_t-min_t}")
+        # don't subtract dist when looking at this
+        print(f"difference from center: {pixel_data[best_coord[0]-1]-pixel_data[center[0]-1]}")
+
+        draw_bounds(bitmask, best_coord[0], best_coord[1], min_dim, min_dim)
+        if dist < 1.9:
+            best_coord = center
+            draw_bounds(cropped_image, best_coord[0], best_coord[1], min_dim, min_dim)
+        #draw_bounds(cropped_image, best_coord[0], best_coord[1], min_dim, min_dim)
+        #draw_bounds(cropped_image, center[0], center[1], min_dim, min_dim)
+        cropped_image = cropped_image[best_coord[1]:best_coord[1]+min_dim, best_coord[0]:best_coord[0]+min_dim]
+
 
     # use sr model for low quality images
     height, width, _ = cropped_image.shape
-    if height * width < 679600:
+    if height * width < 520000 and not args.noupscale:
         print("UPSCALING")
         return upscale(cropped_image)
 
@@ -121,28 +171,26 @@ def draw_bounds(image, x, y, w, h):
 
 
 def upscale(image):
-        # apply some noise before upscaling
         height, width, _ = image.shape
-        cv2.imwrite("lowres_crop.jpg", image)
-        os.system(f"./realesrgan-ncnn-vulkan -i lowres_crop.jpg -o cropped_image.jpg -s 2")
-        cropped_img = Image.open("cropped_image.jpg")
+        cv2.imwrite("tmp/lowres_crop.jpg", image)
+        os.system(f"./realesrgan-ncnn-vulkan -i lowres_crop.jpg -o tmp/cropped_image.jpg -s 2")
+        cropped_img = Image.open("tmp/cropped_image.jpg")
         # esrgan has really aggressive denoising, so we add some noise back into the upscaled image
         arr = np.array(cropped_img)
         avg = sum(cv2.mean(arr)) // 3.0
-        noise = np.random.normal(0, (height*width/(215**2)), arr.shape) 
+        noise = np.random.normal(0, (height*width/(200**2)), arr.shape) 
         noisy = np.clip(arr + noise, 0, 255).astype('uint8')
-        print(noise)
         out = Image.fromarray(noisy)
-        out.save("cropped_image.jpg", 'JPEG', quality=75)
+        out.save("tmp/cropped_image.jpg", 'JPEG', quality=75)
         return None
 
 def cleanup():
-    if os.path.exists("cover.jpg"):
-        os.remove("cover.jpg")
-    if os.path.exists("cropped_image.jpg"):
-        os.remove("cropped_image.jpg")
-    if os.path.exists("lowres_crop.jpg"):
-        os.remove("lowres_crop.jpg")
+    if os.path.exists("tmp/cover.jpg"):
+        os.remove("tmp/cover.jpg")
+    if os.path.exists("tmp/cropped_image.jpg"):
+        os.remove("tmp/cropped_image.jpg")
+    if os.path.exists("tmp/lowres_crop.jpg"):
+        os.remove("tmp/lowres_crop.jpg")
 
 
 def embed_cover_art(mp3_path, cover_art_path):
@@ -165,9 +213,10 @@ def embed_cover_art(mp3_path, cover_art_path):
     print(f"Cover art embedded successfully in '{mp3_path}'.")
 
 
-def process_all():
-    for file in os.listdir("./"):
-        process_one(file)
+def process_all(dir):
+    for file in os.listdir(dir):
+        path = os.path.join(dir, file)
+        process_one(path)
 
 def process_one(file):
         cleanup()
@@ -175,26 +224,37 @@ def process_one(file):
         if _type == "mp3":
             # Load your image
             print(f"Working on: {file}")
-            cover_path = 'cover.jpg'
+            cover_path = 'tmp/cover.jpg'
             extract_cover(file, cover_path)
             image = cv2.imread(cover_path)
             cropped_image = crop_border(image)
             if cropped_image is not None:
-                cv2.imwrite("cropped_image.jpg", cropped_image)
-            embed_cover_art(file, "cropped_image.jpg")
+                cv2.imwrite("tmp/cropped_image.jpg", cropped_image)
+            if not args.noembed:
+                embed_cover_art(file, "tmp/cropped_image.jpg")
             
 parser = argparse.ArgumentParser(description='Crops cover images of mp3 files')
 parser.add_argument('-i', '--input', type=str, help='mp3 file')
 parser.add_argument('-a', '--all', action='store_true' , help='mp3 file')
 parser.add_argument('-u', '--update', type=str, help='mp3 file')
+parser.add_argument('-d', '--directory', type=str, help='directory used by --all')
+parser.add_argument('-nu', '--noupscale', action='store_true', help='do not use sr to upscale low res images')
+parser.add_argument('-ne', '--noembed', action='store_true', help='do not embed output image into the input mp3')
+parser.add_argument('-tmp', '--tmpfs', action='store_true', help='create tmpfs for storing images')
 
 args = parser.parse_args()
 if args.input:
     process_one(args.input)
     exit()
 if args.all:
-    process_all()
+    if args.directory:
+        process_all(args.directory)
+    else:
+        process_all('./')
 if args.update:
-    embed_cover_art(args.update, "cropped_image.jpg")
-
-
+    embed_cover_art(args.update, "tmp/cropped_image.jpg")
+if not os.path.exists('tmp'):
+    os.mkdir('tmp')
+if args.tmpfs:
+    tmp_path = os.path.join(os.chdir(), 'tmp')
+    os.system(f'mount -t tmpfs -o size=2G tmpfs {tmp_path}') 
