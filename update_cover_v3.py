@@ -25,24 +25,31 @@ def extract_cover(mp3_path, out):
 
 
 def crop_border(image):
+    height, width, _ = image.shape
+    if height == width:
+        return image
+
     if args.force_center:
-        return crop_to_square(image)
+        cropped_image = crop_to_square(image)
+        h, w, _ = cropped_image.shape
+        if h * w < 520000 and not args.noupscale:
+            print("UPSCALING")
+            return upscale(cropped_image)
+        else: return cropped_image
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     gray = cv2.equalizeHist(gray)
 
     # thresholding is unnecessary after edge detection 
     #_, gray = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY)
-    #gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
-    gray = cv2.GaussianBlur(gray, (5, 5), 0.5)
-    gray = cv2.Canny(gray, 20, 50, apertureSize=3, L2gradient=True)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    gray = cv2.Canny(gray, 20, 50, apertureSize=5, L2gradient=True)
 
-    height, width, _ = image.shape
     # forms a closed shape with vertical lines, to create a contour, 
     startx = (width - height) // 2
-    cv2.line(gray, (startx, 4), (startx+height, 4), (255, 255, 255), 1)
-    cv2.line(gray, (startx, height-4), (startx+height, height-4), (255, 255, 255), 1)
+    cv2.line(gray, (startx, 4), (startx+height, 4), (255, 255, 255), 2)
+    cv2.line(gray, (startx, height-4), (startx+height, height-4), (255, 255, 255), 2)
 
     # Canny edge detection results in very thin lines. 
     # Particularly, distinct lines aren't detected by findContours() so we dialate the lines 
@@ -54,7 +61,7 @@ def crop_border(image):
     max_contour = max(contours, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(max_contour)
 
-    #draw_bounds(gray, x, y, w, h)
+    draw_bounds(gray, x, y, w, h)
 
     # ignore crop if it's too small (usually the result of small foreground)
     if float(w) < float(width)/2.5 or float(h) < float(height)/2.5:
@@ -69,7 +76,7 @@ def crop_border(image):
     height, width, _ = cropped_image.shape
     if float(width)/height < 1.35 and float(width)/height > 0.65:
         print("SQUARING")
-        cropped_image = crop_to_square(cropped_image)
+        cropped_image = crop_to_square(image)
     else:
         # find "best" square
         cropped_gray = image[y:y+h, x:x+w]
@@ -111,6 +118,7 @@ def crop_border(image):
                     best = square_sum
                     best_coord = (i, j)
 
+        # normalize pixel_data so the matplot grab becomes actually legible 
         pixel_data = minmax_normalize(np.array(pixel_data))
         pixel_data = con_smoothen(pixel_data, kernel_size=50)
 
@@ -120,7 +128,7 @@ def crop_border(image):
         # keep everything the same shape
         dydx.append(dydx[-1])
         dydx = minmax_normalize(np.array(dydx))
-        dydx = con_smoothen(dydx, kernel_size=1)
+        #dydx = con_smoothen(dydx, kernel_size=1)
 
         adjvalues = pixel_data/dydx 
         max_raw = np.argmax(pixel_data)*skip
@@ -146,10 +154,11 @@ def crop_border(image):
         dist = np.sqrt((center[0]-best_coord[0])**2 + (center[1]-best_coord[1])**2) / (width*height*0.00005)
         print(f"distance from center: {dist}")
 
-        draw_bounds(bitmask, best_coord[0], best_coord[1], min_dim, min_dim)
-        if dist < 1.87:
+        #draw_bounds(bitmask, center[0], center[1], min_dim, min_dim)
+        #draw_bounds(bitmask, best_coord[0], best_coord[1], min_dim, min_dim)
+        if dist < 1.8:
             best_coord = center
-            draw_bounds(cropped_image, best_coord[0], best_coord[1], min_dim, min_dim)
+            #draw_bounds(cropped_image, best_coord[0], best_coord[1], min_dim, min_dim)
         #draw_bounds(cropped_image, best_coord[0], best_coord[1], min_dim, min_dim)
         #draw_bounds(cropped_image, center[0], center[1], min_dim, min_dim)
         cropped_image = cropped_image[best_coord[1]:best_coord[1]+min_dim, best_coord[0]:best_coord[0]+min_dim]
@@ -183,6 +192,7 @@ def mean_normalize(data):
     mean = np.mean(data)
     return np.abs(data - mean) / (max - min)
 
+
 def crop_to_square(image):
     height, width, _ = image.shape
     min_dim = min(height, width)
@@ -205,6 +215,7 @@ def draw_bounds(image, x, y, w, h):
     cv2.imshow("N", image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
 
 def upscale(image):
         height, width, _ = image.shape
