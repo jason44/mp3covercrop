@@ -52,7 +52,7 @@ def crop_border(image):
     cv2.line(gray, (startx, height-4), (startx+height, height-4), (255, 255, 255), 2)
 
     # Canny edge detection results in very thin lines. 
-    # Particularly, distinct lines aren't detected by findContours() so we dialate the lines 
+    # Particularly, distinct lines aren't detected by findContours() so dialate the lines 
     kernel = np.ones((5, 5),np.uint8)
     gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel, iterations = 2)
 
@@ -74,9 +74,12 @@ def crop_border(image):
     # square an image if it is already square-like
     cropped_image = image[y:y+h, x:x+w]
     height, width, _ = cropped_image.shape
-    if float(width)/height < 1.35 and float(width)/height > 0.65:
+    if float(width)/height < 1.35 and float(width)/height >= 1.0: 
         print("SQUARING")
         cropped_image = crop_to_square(image)
+    elif float(width)/height > 0.65 and float(width/height) <= 1.0 :
+        print("SQUARING (TALL)")
+        cropped_image = crop_to_square(cropped_image)
     else:
         # find "best" square
         cropped_gray = image[y:y+h, x:x+w]

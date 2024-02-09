@@ -55,7 +55,7 @@ def crop_border(image):
     if float(w) < float(width)/2.5 or float(h) < float(height)/2.5:
         print("BOX TOO SMALL. RETURNING ORIGINAL IMAGE")
         draw_bounds(gray, x, y, w, h)
-        if height * width < 510000 and not args.noupscale:
+        if height * width < 518000 and not args.noupscale:
             return upscale(image)
         return image 
 
@@ -140,7 +140,7 @@ def crop_border(image):
 
     # use sr model for low quality images
     height, width, _ = cropped_image.shape
-    if height * width < 520000 and not args.noupscale:
+    if height * width < 518000 and not args.noupscale:
         print("UPSCALING")
         return upscale(cropped_image)
 
