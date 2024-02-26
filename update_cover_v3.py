@@ -31,8 +31,9 @@ def crop_border(image):
 
     if args.force_center:
         cropped_image = crop_to_square(image)
+        cropped_image = gradient_border(cropped_image)
         h, w, _ = cropped_image.shape
-        if h * w < 520000 and not args.noupscale:
+        if h * w < 445000 and not args.noupscale:
             print("UPSCALING")
             return upscale(cropped_image)
         else: return cropped_image
@@ -44,7 +45,7 @@ def crop_border(image):
     #_, gray = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY)
 
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    gray = cv2.Canny(gray, 20, 50, apertureSize=5, L2gradient=True)
+    gray = cv2.Canny(gray, 20, 50, apertureSize=3, L2gradient=True)
 
     # forms a closed shape with vertical lines, to create a contour, 
     startx = (width - height) // 2
@@ -67,19 +68,27 @@ def crop_border(image):
     if float(w) < float(width)/2.5 or float(h) < float(height)/2.5:
         print("BOX TOO SMALL. RETURNING ORIGINAL IMAGE")
         draw_bounds(gray, x, y, w, h)
-        if height * width < 510000 and not args.noupscale:
+        if height * width < 445000 and not args.noupscale:
             return upscale(image)
         return image 
 
     # square an image if it is already square-like
     cropped_image = image[y:y+h, x:x+w]
     height, width, _ = cropped_image.shape
-    if float(width)/height < 1.35 and float(width)/height >= 1.0: 
+    if float(width)/height < 1.35 and float(width)/height >= 0.65: 
+        # check distance from the predicted square and clamp if it's small enough
         print("SQUARING")
-        cropped_image = crop_to_square(image)
-    elif float(width)/height > 0.65 and float(width/height) <= 1.0 :
-        print("SQUARING (TALL)")
-        cropped_image = crop_to_square(cropped_image)
+        height, width, _ = image.shape
+        min_dim = min(height, width)
+        startx = (width - min_dim) // 2
+        starty = (height - min_dim) // 2
+        dist = np.sqrt((startx-x)**2 + (starty-y)**2)
+        print(dist)
+        if dist < 20.0:
+            cropped_image = crop_to_square(image)
+        else:
+            cropped_image = crop_to_square(cropped_image)
+        # draw gradient outline to 'solve' problem? (might be more of an asthetic change)
     else:
         # find "best" square
         cropped_gray = image[y:y+h, x:x+w]
@@ -152,7 +161,7 @@ def crop_border(image):
         axes[0, 2].set_xlabel('x offset')
         axes[0, 2].set_ylabel('final value')
         plt.tight_layout()
-        plt.show()
+        #plt.show()
 
         dist = np.sqrt((center[0]-best_coord[0])**2 + (center[1]-best_coord[1])**2) / (width*height*0.00005)
         print(f"distance from center: {dist}")
@@ -166,18 +175,15 @@ def crop_border(image):
         #draw_bounds(cropped_image, center[0], center[1], min_dim, min_dim)
         cropped_image = cropped_image[best_coord[1]:best_coord[1]+min_dim, best_coord[0]:best_coord[0]+min_dim]
 
+    cropped_image = gradient_border(cropped_image)
+
     # use sr model for low quality images
     height, width, _ = cropped_image.shape
-    if height * width < 520000 and not args.noupscale:
+    if height * width < 445000 and not args.noupscale:
         print("UPSCALING")
-        return upscale(cropped_image)
-
+        cropped_image = upscale(cropped_image)
+    
     return cropped_image
-
-def smoothen(data, window_size):
-    cumsum = np.cumsum(data, dtype=float)
-    cumsum[window_size:] = cumsum[window_size:] - cumsum[:-window_size]
-    return cumsum[window_size - 1:] / window_size
 
 def con_smoothen(data, kernel_size):
     kernel = np.ones(kernel_size) / kernel_size
@@ -195,17 +201,30 @@ def mean_normalize(data):
     mean = np.mean(data)
     return np.abs(data - mean) / (max - min)
 
+def gradient_border(image, border_size=6):
+    blurred = cv2.stackBlur(image, (227, 227))
+    topedge = blurred[:border_size, :]
+    botedge = blurred[:-border_size:-1, :] 
+    leftedge = blurred[:, :border_size] 
+    rightedge = blurred[:, :-border_size:-1]
+    edgeavg = (np.average(topedge) + np.average(botedge) + np.average(leftedge) + np.average(rightedge)) / 4
+    blurred = np.clip(blurred*1.75, 0, min(edgeavg+20, 255))
+    image[:border_size, :] = topedge
+    image[:-border_size:-1, :] = botedge
+    image[:, :border_size] = leftedge
+    image[:, :-border_size:-1] = rightedge
+    return image
 
 def crop_to_square(image):
     height, width, _ = image.shape
     min_dim = min(height, width)
-    startx = (height - min_dim) // 2
-    endx = startx + min_dim
-    # since all images are 16:9, we always have starty = 0
-    starty = (width - min_dim) // 2
+    starty = (height - min_dim) // 2
     endy = starty + min_dim
+    # since all images are 16:9, we always have starty = 0
+    startx = (width - min_dim) // 2
+    endx = startx + min_dim
 
-    cropped_image = image[startx:endx, starty:endy]
+    cropped_image = image[starty:endy, startx:endx]
 
     return cropped_image
 
@@ -215,7 +234,7 @@ def draw_bounds(image, x, y, w, h):
     cv2.line(image, (x, y+h), (x+w, y+h), (255, 0, 0), 2)
     cv2.line(image, (x+w, y), (x+w, y+h), (255, 0, 0), 2)
 
-    cv2.imshow("N", image)
+    #cv2.imshow("N", image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
@@ -228,7 +247,7 @@ def upscale(image):
         # esrgan has really aggressive denoising, so we add some noise back into the upscaled image
         arr = np.array(cropped_img)
         avg = sum(cv2.mean(arr)) // 3.0
-        noise = np.random.normal(0, (height*width/(200**2)), arr.shape) 
+        noise = np.random.normal(0, (height*width/(300**2)), arr.shape) 
         noisy = np.clip(arr + noise, 0, 255).astype('uint8')
         out = Image.fromarray(noisy)
         out.save("tmp/cropped_image.jpg", 'JPEG', quality=75)
@@ -279,6 +298,7 @@ def process_one(file):
             image = cv2.imread(cover_path)
             cropped_image = crop_border(image)
             if cropped_image is not None:
+                # draw gradient border
                 cv2.imwrite("tmp/cropped_image.jpg", cropped_image)
             if not args.noembed:
                 embed_cover_art(file, "tmp/cropped_image.jpg")
@@ -286,7 +306,7 @@ def process_one(file):
 parser = argparse.ArgumentParser(description='Crops cover images of mp3 files')
 parser.add_argument('-i', '--input', type=str, help='mp3 file')
 parser.add_argument('-a', '--all', action='store_true' , help='mp3 file')
-parser.add_argument('-u', '--update', type=str, help='mp3 file')
+parser.add_argument('-u', '--update', type=str, help='update mp3 file with cropped_image.jpg')
 parser.add_argument('-d', '--directory', type=str, help='directory used by --all')
 parser.add_argument('-nu', '--noupscale', action='store_true', help='do not use sr to upscale low res images')
 parser.add_argument('-ne', '--noembed', action='store_true', help='do not embed output image into the input mp3')
