@@ -16,8 +16,9 @@ def extract_cover(mp3_path, out):
     if audiofile.tag.frame_set.get(b'APIC'):
         cover_frame = audiofile.tag.frame_set[b'APIC'][0]
         image_data = cover_frame.image_data
-        image = Image.open(io.BytesIO(image_data))
-        image.save(out)
+        image = cv2.imdecode(np.frombuffer(image_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        #image.save(out)
+        cv2.imwrite(out, image)
         
         print(f"Cover image saved to: {out}")
     else:
@@ -284,15 +285,16 @@ def embed_cover_art(mp3_path, cover_art_path):
 
 def process_all(dir):
     for file in os.listdir(dir):
-        path = os.path.join(dir, file)
-        process_one(path)
+            path = os.path.join(dir, file)
+            process_one(path)
 
 def process_one(file):
+    if file.split('.')[-1] == 'mp3':
         cleanup()
         _type = file.split('.')[-1]
         if _type == "mp3":
             # Load your image
-            print(f"Working on: {file}")
+            print(f"Working on: '{file}'")
             cover_path = 'tmp/cover.jpg'
             extract_cover(file, cover_path)
             image = cv2.imread(cover_path)
